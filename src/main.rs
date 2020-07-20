@@ -1,6 +1,6 @@
 use iced::{
-    button, text_input, Align, Application, Button, Column, Command, Container, Element, Font,
-    HorizontalAlignment, Length, Row, Settings, Text, TextInput,
+    button, executor, text_input, Application, Column, Command, Container, Element, Font, Length,
+    Row, Settings, Text, TextInput,
 };
 
 const DEFAULT_FONT: Font = Font::External {
@@ -47,9 +47,11 @@ enum Message {
 }
 
 impl Application for Counter {
+    type Executor = executor::Default;
     type Message = Message;
+    type Flags = ();
 
-    fn new() -> (Self, Command<Message>) {
+    fn new(_flags: ()) -> (Self, Command<Message>) {
         (Self::default(), Command::none())
     }
 
