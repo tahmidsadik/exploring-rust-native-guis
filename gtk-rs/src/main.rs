@@ -144,7 +144,6 @@ fn main() {
                 let iter = args[1].get::<TextIter>().unwrap().unwrap();
 
                 let tag = tt.read().expect("Cannot get read lock");
-                println!("tag = {}", tag);
                 let tag = tb
                     .get_tag_table()
                     .unwrap()
