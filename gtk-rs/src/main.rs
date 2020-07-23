@@ -2,13 +2,13 @@ use gdk::Screen;
 use gio::prelude::*;
 use gtk::prelude::*;
 use gtk::{
-    Align, Application, ApplicationWindow, Box, Button, ButtonBox, ColorButton, ReliefStyle,
-    TextBuffer, TextIter, TextTag, TextView,
+    Align, Application, ApplicationWindow, Box, Button, ReliefStyle, TextBuffer, TextIter, TextTag,
+    TextView,
 };
 
 use std::sync::{Arc, RwLock};
 
-const COLORS: [&str; 3] = ["#F5E050", "#F38E94", "#CC8CF3"];
+const COLORS: [&str; 3] = ["#F38E94", "#F5E050", "#CC8CF3"];
 
 const STYLE: &str = "
     
@@ -16,6 +16,7 @@ const STYLE: &str = "
         background-image: none;
         color: black;
         border-radius: 0;
+        font-family: Gaegu;
     }
 
     button:hover {
@@ -125,7 +126,7 @@ fn main() {
                 gtk::TextTagBuilder::new()
                     .name(format!("color_tag_{}", idx).as_str())
                     .foreground(*color)
-                    .size_points(12.0)
+                    .font("Gaegu")
                     .build()
             })
             .collect::<Vec<TextTag>>();
