@@ -6,11 +6,33 @@ use gtk::{
 };
 use relm::{connect, Relm, Update, Widget};
 use relm_derive::Msg;
+
+mod text_ops;
+use text_ops::Ops;
+
 const COLORS: [&str; 3] = ["#F5E050", "#F38E94", "#CC8CF3"];
 
 struct InsertTextEventData {
     offset: i32,
     content: String,
+}
+
+struct TextDelta {
+    text: String,
+    tag: String,
+    offset_start: i32,
+    offset_end: i32,
+}
+
+impl TextDelta {
+    fn new(text: String, tag: String) -> Self {
+        return TextDelta {
+            text,
+            tag,
+            offset_start: 0,
+            offset_end: 0,
+        };
+    }
 }
 
 impl InsertTextEventData {
@@ -23,7 +45,9 @@ impl InsertTextEventData {
 }
 
 struct Model {
-    selected_tag: String,
+    current_tag: String,
+    previous_tag: String,
+    deltas: Vec<TextDelta>,
 }
 
 #[derive(Msg)]
@@ -49,7 +73,7 @@ fn show_error_dialog(error_msg: &str) {
     dialog.set_title("Error");
     dialog.add_button("Okay", gtk::ResponseType::Ok);
     dialog.set_valign(Align::Center);
-    dialog.connect_response(|d, r| {
+    dialog.connect_response(|d, _r| {
         d.close();
     });
     dialog.set_size_request(400, 250);
@@ -82,7 +106,9 @@ impl Update for Win {
 
     fn model(_: &Relm<Self>, _: ()) -> Model {
         Model {
-            selected_tag: String::from("color_tag_1"),
+            current_tag: String::from("color_tag_1"),
+            previous_tag: String::from("color_tag_1"),
+            deltas: vec![TextDelta::new("".to_string(), "color_tag_1".to_string())],
         }
     }
 
@@ -91,7 +117,8 @@ impl Update for Win {
 
         match event {
             Msg::SelectColor(color) => {
-                self.model.selected_tag = color;
+                self.model.previous_tag = self.model.current_tag.clone();
+                self.model.current_tag = color;
             }
             Msg::InsertText(s) => {
                 let tag_table = tb
@@ -99,7 +126,7 @@ impl Update for Win {
                     .expect("Couldn't get hold of a tag table!");
 
                 let tag = tag_table
-                    .lookup(self.model.selected_tag.as_str())
+                    .lookup(self.model.current_tag.as_str())
                     .expect("Fatal: Cannot find tag color_tag_1");
 
                 tb.apply_tag(
@@ -107,6 +134,31 @@ impl Update for Win {
                     &tb.get_iter_at_offset(s.offset),
                     &tb.get_iter_at_offset(s.offset + 1),
                 );
+
+                // tb.serialize();
+                let format = tb.register_serialize_tagset(None);
+
+                let serialized =
+                    tb.serialize(tb, &format, &tb.get_start_iter(), &tb.get_end_iter());
+
+                // for f in formats {
+                //     println!("{:?}", f);
+                // }
+
+                // find text delta
+                let search_iter = tb.get_start_iter();
+                match search_iter.forward_search(
+                    "Hello",
+                    gtk::TextSearchFlags::CASE_INSENSITIVE,
+                    None,
+                ) {
+                    Some((res_start_iter, res_end_iter)) => println!(
+                        "{}, {}",
+                        res_start_iter.get_offset(),
+                        res_end_iter.get_offset()
+                    ),
+                    None => {}
+                };
             }
             Msg::Quit => gtk::main_quit(),
         }
@@ -137,6 +189,35 @@ impl Widget for Win {
                 panic!("Fatal: Cannot retrieve text buffer from gtk text view");
             }
         };
+
+        let ops = vec![
+            Ops::Insert("h".to_string()),
+            Ops::Insert("e".to_string()),
+            Ops::Insert("l".to_string()),
+            Ops::Insert("l".to_string()),
+            Ops::Insert("o".to_string()),
+            Ops::Insert("!".to_string()),
+            Ops::MoveCursor(2),
+            Ops::Delete(2),
+        ];
+
+        for op in ops {
+            match op {
+                Ops::Insert(text) => {
+                    buffer.insert_at_cursor(text.as_str());
+                }
+                Ops::Delete(count) => {
+                    let offset_start = buffer.get_property_cursor_position();
+                    buffer.delete(
+                        &mut buffer.get_iter_at_offset(offset_start),
+                        &mut buffer.get_iter_at_offset(offset_start + count),
+                    );
+                }
+                Ops::MoveCursor(position) => {
+                    buffer.place_cursor(&buffer.get_iter_at_offset(position))
+                }
+            }
+        }
 
         let btn1 = get_button(COLORS[0]);
         let btn2 = get_button(COLORS[1]);
