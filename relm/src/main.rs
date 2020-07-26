@@ -6,11 +6,14 @@ use gtk::{
 };
 use relm::{connect, Relm, Update, Widget};
 use relm_derive::Msg;
+use std::fs::File;
+use std::io::Read;
 
 mod text_ops;
 use text_ops::Ops;
 
 const COLORS: [&str; 3] = ["#F5E050", "#F38E94", "#CC8CF3"];
+const NOTE_FILE_NAME: &str = "note-backup.bin";
 
 struct InsertTextEventData {
     offset: i32,
@@ -47,7 +50,7 @@ impl InsertTextEventData {
 struct Model {
     current_tag: String,
     previous_tag: String,
-    deltas: Vec<TextDelta>,
+    ops: Vec<Ops>,
 }
 
 #[derive(Msg)]
@@ -55,9 +58,11 @@ enum Msg {
     Quit,
     InsertText(InsertTextEventData),
     SelectColor(String),
+    SaveNote,
+    Hydrate,
 }
 
-fn get_button(name: &str) -> Button {
+fn get_button_with_label(name: &str) -> Button {
     let button = Button::new();
     button.set_widget_name(name);
     button.set_size_request(140, 50);
@@ -88,12 +93,34 @@ fn show_error_dialog(error_msg: &str) {
 #[derive(Clone)]
 struct Widgets {
     buffer: TextBuffer,
+    save_button: Button,
     window: Window,
 }
 
 struct Win {
     model: Model,
     widgets: Widgets,
+}
+
+impl Win {
+    fn apply_ops(&mut self, op: Ops) {
+        match op {
+            Ops::Insert(text) => {
+                self.widgets.buffer.insert_at_cursor(text.as_str());
+            }
+            Ops::Delete(count) => {
+                let offset_start = self.widgets.buffer.get_property_cursor_position();
+                self.widgets.buffer.delete(
+                    &mut self.widgets.buffer.get_iter_at_offset(offset_start),
+                    &mut self.widgets.buffer.get_iter_at_offset(offset_start + count),
+                );
+            }
+            Ops::MoveCursor(position) => self
+                .widgets
+                .buffer
+                .place_cursor(&self.widgets.buffer.get_iter_at_offset(position)),
+        }
+    }
 }
 
 impl Update for Win {
@@ -108,7 +135,7 @@ impl Update for Win {
         Model {
             current_tag: String::from("color_tag_1"),
             previous_tag: String::from("color_tag_1"),
-            deltas: vec![TextDelta::new("".to_string(), "color_tag_1".to_string())],
+            ops: vec![],
         }
     }
 
@@ -135,30 +162,73 @@ impl Update for Win {
                     &tb.get_iter_at_offset(s.offset + 1),
                 );
 
-                // tb.serialize();
-                let format = tb.register_serialize_tagset(None);
+                self.model.ops.push(Ops::Insert(s.content));
 
-                let serialized =
-                    tb.serialize(tb, &format, &tb.get_start_iter(), &tb.get_end_iter());
+                println!("ops = {:?}", self.model.ops);
+
+                // tb.serialize();
+                // let format = tb.register_serialize_tagset(None);
+
+                // let serialized =
+                //     tb.serialize(tb, &format, &tb.get_start_iter(), &tb.get_end_iter());
 
                 // for f in formats {
                 //     println!("{:?}", f);
                 // }
 
                 // find text delta
-                let search_iter = tb.get_start_iter();
-                match search_iter.forward_search(
-                    "Hello",
-                    gtk::TextSearchFlags::CASE_INSENSITIVE,
-                    None,
-                ) {
-                    Some((res_start_iter, res_end_iter)) => println!(
-                        "{}, {}",
-                        res_start_iter.get_offset(),
-                        res_end_iter.get_offset()
-                    ),
-                    None => {}
-                };
+                // let search_iter = tb.get_start_iter();
+                // match search_iter.forward_search(
+                //     "Hello",
+                //     gtk::TextSearchFlags::CASE_INSENSITIVE,
+                //     None,
+                // ) {
+                //     Some((res_start_iter, res_end_iter)) => println!(
+                //         "{}, {}",
+                //         res_start_iter.get_offset(),
+                //         res_end_iter.get_offset()
+                //     ),
+                //     None => {}
+                // };
+            }
+            Msg::SaveNote => {
+                println!("Saving Note");
+                println!("{:?}", self.model.ops);
+                match bincode::serialize(&self.model.ops) {
+                    Ok(serialized_note) => {
+                        println!(
+                            "serialized note = {}",
+                            String::from_utf8_lossy(&serialized_note)
+                        );
+                        std::fs::write(NOTE_FILE_NAME, serialized_note);
+                    }
+                    Err(err) => {
+                        show_error_dialog(err.to_string().as_str());
+                    }
+                }
+            }
+            Msg::Hydrate => {
+                println!("Hydrating...");
+                match File::open(NOTE_FILE_NAME) {
+                    Ok(mut file) => {
+                        let mut buf: Vec<u8> = vec![];
+                        match file.read_to_end(&mut buf) {
+                            Ok(_size) => {
+                                let ops = bincode::deserialize::<Vec<Ops>>(&buf)
+                                    .expect("Error trying to deserialize binary data");
+                                for op in ops {
+                                    self.apply_ops(op);
+                                }
+                            }
+                            Err(err) => {
+                                show_error_dialog(err.to_string().as_str());
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        show_error_dialog(err.to_string().as_str());
+                    }
+                }
             }
             Msg::Quit => gtk::main_quit(),
         }
@@ -176,7 +246,8 @@ impl Widget for Win {
 
     fn view(relm: &Relm<Self>, model: Self::Model) -> Self {
         // Create the view using the normal GTK+ method calls.
-        //
+
+        relm.stream().clone().emit(Msg::Hydrate);
         let hbox = Box::new(Horizontal, 0);
         let button_box = gtk::Box::new(Vertical, 10);
         button_box.set_size_request(220, 220);
@@ -190,38 +261,39 @@ impl Widget for Win {
             }
         };
 
-        let ops = vec![
-            Ops::Insert("h".to_string()),
-            Ops::Insert("e".to_string()),
-            Ops::Insert("l".to_string()),
-            Ops::Insert("l".to_string()),
-            Ops::Insert("o".to_string()),
-            Ops::Insert("!".to_string()),
-            Ops::MoveCursor(2),
-            Ops::Delete(2),
-        ];
-
-        for op in ops {
-            match op {
-                Ops::Insert(text) => {
-                    buffer.insert_at_cursor(text.as_str());
-                }
-                Ops::Delete(count) => {
-                    let offset_start = buffer.get_property_cursor_position();
-                    buffer.delete(
-                        &mut buffer.get_iter_at_offset(offset_start),
-                        &mut buffer.get_iter_at_offset(offset_start + count),
-                    );
-                }
-                Ops::MoveCursor(position) => {
-                    buffer.place_cursor(&buffer.get_iter_at_offset(position))
-                }
-            }
-        }
-
-        let btn1 = get_button(COLORS[0]);
-        let btn2 = get_button(COLORS[1]);
-        let btn3 = get_button(COLORS[2]);
+        // let ops = vec![
+        //     Ops::Insert("h".to_string()),
+        //     Ops::Insert("e".to_string()),
+        //     Ops::Insert("l".to_string()),
+        //     Ops::Insert("l".to_string()),
+        //     Ops::Insert("o".to_string()),
+        //     Ops::Insert("!".to_string()),
+        //     Ops::MoveCursor(2),
+        //     Ops::Delete(2),
+        // ];
+        //
+        // for op in ops {
+        //     match op {
+        //         Ops::Insert(text) => {
+        //             buffer.insert_at_cursor(text.as_str());
+        //         }
+        //         Ops::Delete(count) => {
+        //             let offset_start = buffer.get_property_cursor_position();
+        //             buffer.delete(
+        //                 &mut buffer.get_iter_at_offset(offset_start),
+        //                 &mut buffer.get_iter_at_offset(offset_start + count),
+        //             );
+        //         }
+        //         Ops::MoveCursor(position) => {
+        //             buffer.place_cursor(&buffer.get_iter_at_offset(position))
+        //         }
+        //     }
+        // }
+        //
+        let btn1 = get_button_with_label(COLORS[0]);
+        let btn2 = get_button_with_label(COLORS[1]);
+        let btn3 = get_button_with_label(COLORS[2]);
+        let save_button = get_button_with_label("Save Note");
 
         tv.set_left_margin(20);
         tv.set_right_margin(20);
@@ -231,6 +303,7 @@ impl Widget for Win {
         button_box.add(&btn1);
         button_box.add(&btn2);
         button_box.add(&btn3);
+        button_box.pack_end(&save_button, false, false, 10);
         hbox.pack_start(&button_box, false, false, 0);
         hbox.pack_start(&tv, true, true, 0);
 
@@ -249,7 +322,7 @@ impl Widget for Win {
             .map(|(idx, color)| {
                 gtk::TextTagBuilder::new()
                     .name(format!("color_tag_{}", idx + 1).as_str())
-                    .size_points(13.0)
+                    .size_points(16.0)
                     .foreground(*color)
                     .font("Gaegu")
                     .build()
@@ -295,9 +368,15 @@ impl Widget for Win {
             connect_clicked(_),
             Msg::SelectColor(String::from("color_tag_3"))
         );
+
+        connect!(relm, save_button, connect_clicked(_), Msg::SaveNote);
         Win {
             model,
-            widgets: Widgets { window, buffer },
+            widgets: Widgets {
+                window,
+                buffer,
+                save_button,
+            },
         }
     }
 }
