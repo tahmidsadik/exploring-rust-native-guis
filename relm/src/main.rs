@@ -10,42 +10,10 @@ use std::fs::File;
 use std::io::Read;
 
 mod text_ops;
-use text_ops::Ops;
+use text_ops::{DeleteTextEventData, InsertTextEventData, Ops};
 
 const COLORS: [&str; 3] = ["#F5E050", "#F38E94", "#CC8CF3"];
 const NOTE_FILE_NAME: &str = "note-backup.bin";
-
-struct InsertTextEventData {
-    offset: i32,
-    content: String,
-}
-
-struct TextDelta {
-    text: String,
-    tag: String,
-    offset_start: i32,
-    offset_end: i32,
-}
-
-impl TextDelta {
-    fn new(text: String, tag: String) -> Self {
-        return TextDelta {
-            text,
-            tag,
-            offset_start: 0,
-            offset_end: 0,
-        };
-    }
-}
-
-impl InsertTextEventData {
-    fn new(offset: i32, content: &str) -> Self {
-        InsertTextEventData {
-            offset,
-            content: String::from(content),
-        }
-    }
-}
 
 struct Model {
     current_tag: String,
@@ -57,6 +25,7 @@ struct Model {
 enum Msg {
     Quit,
     InsertText(InsertTextEventData),
+    DeleteText(DeleteTextEventData),
     SelectColor(String),
     SaveNote,
     Hydrate,
@@ -108,11 +77,11 @@ impl Win {
             Ops::Insert(text) => {
                 self.widgets.buffer.insert_at_cursor(text.as_str());
             }
-            Ops::Delete(count) => {
-                let offset_start = self.widgets.buffer.get_property_cursor_position();
+            Ops::Delete(offsets) => {
+                let (start_offset, end_offset) = offsets;
                 self.widgets.buffer.delete(
-                    &mut self.widgets.buffer.get_iter_at_offset(offset_start),
-                    &mut self.widgets.buffer.get_iter_at_offset(offset_start + count),
+                    &mut self.widgets.buffer.get_iter_at_offset(start_offset),
+                    &mut self.widgets.buffer.get_iter_at_offset(end_offset),
                 );
             }
             Ops::MoveCursor(position) => self
@@ -164,8 +133,6 @@ impl Update for Win {
 
                 self.model.ops.push(Ops::Insert(s.content));
 
-                println!("ops = {:?}", self.model.ops);
-
                 // tb.serialize();
                 // let format = tb.register_serialize_tagset(None);
 
@@ -191,45 +158,38 @@ impl Update for Win {
                 //     None => {}
                 // };
             }
-            Msg::SaveNote => {
-                println!("Saving Note");
-                println!("{:?}", self.model.ops);
-                match bincode::serialize(&self.model.ops) {
-                    Ok(serialized_note) => {
-                        println!(
-                            "serialized note = {}",
-                            String::from_utf8_lossy(&serialized_note)
-                        );
-                        std::fs::write(NOTE_FILE_NAME, serialized_note);
-                    }
-                    Err(err) => {
-                        show_error_dialog(err.to_string().as_str());
-                    }
+            Msg::DeleteText(delete_text_event_data) => self.model.ops.push(Ops::Delete((
+                delete_text_event_data.start_offset,
+                delete_text_event_data.end_offset,
+            ))),
+            Msg::SaveNote => match bincode::serialize(&self.model.ops) {
+                Ok(serialized_note) => {
+                    std::fs::write(NOTE_FILE_NAME, serialized_note);
                 }
-            }
-            Msg::Hydrate => {
-                println!("Hydrating...");
-                match File::open(NOTE_FILE_NAME) {
-                    Ok(mut file) => {
-                        let mut buf: Vec<u8> = vec![];
-                        match file.read_to_end(&mut buf) {
-                            Ok(_size) => {
-                                let ops = bincode::deserialize::<Vec<Ops>>(&buf)
-                                    .expect("Error trying to deserialize binary data");
-                                for op in ops {
-                                    self.apply_ops(op);
-                                }
-                            }
-                            Err(err) => {
-                                show_error_dialog(err.to_string().as_str());
+                Err(err) => {
+                    show_error_dialog(err.to_string().as_str());
+                }
+            },
+            Msg::Hydrate => match File::open(NOTE_FILE_NAME) {
+                Ok(mut file) => {
+                    let mut buf: Vec<u8> = vec![];
+                    match file.read_to_end(&mut buf) {
+                        Ok(_size) => {
+                            let ops = bincode::deserialize::<Vec<Ops>>(&buf)
+                                .expect("Error trying to deserialize binary data");
+                            for op in ops {
+                                self.apply_ops(op);
                             }
                         }
-                    }
-                    Err(err) => {
-                        show_error_dialog(err.to_string().as_str());
+                        Err(err) => {
+                            show_error_dialog(err.to_string().as_str());
+                        }
                     }
                 }
-            }
+                Err(err) => {
+                    show_error_dialog(err.to_string().as_str());
+                }
+            },
             Msg::Quit => gtk::main_quit(),
         }
     }
@@ -261,35 +221,6 @@ impl Widget for Win {
             }
         };
 
-        // let ops = vec![
-        //     Ops::Insert("h".to_string()),
-        //     Ops::Insert("e".to_string()),
-        //     Ops::Insert("l".to_string()),
-        //     Ops::Insert("l".to_string()),
-        //     Ops::Insert("o".to_string()),
-        //     Ops::Insert("!".to_string()),
-        //     Ops::MoveCursor(2),
-        //     Ops::Delete(2),
-        // ];
-        //
-        // for op in ops {
-        //     match op {
-        //         Ops::Insert(text) => {
-        //             buffer.insert_at_cursor(text.as_str());
-        //         }
-        //         Ops::Delete(count) => {
-        //             let offset_start = buffer.get_property_cursor_position();
-        //             buffer.delete(
-        //                 &mut buffer.get_iter_at_offset(offset_start),
-        //                 &mut buffer.get_iter_at_offset(offset_start + count),
-        //             );
-        //         }
-        //         Ops::MoveCursor(position) => {
-        //             buffer.place_cursor(&buffer.get_iter_at_offset(position))
-        //         }
-        //     }
-        // }
-        //
         let btn1 = get_button_with_label(COLORS[0]);
         let btn2 = get_button_with_label(COLORS[1]);
         let btn3 = get_button_with_label(COLORS[2]);
@@ -341,11 +272,15 @@ impl Widget for Win {
             connect_insert_text(_tb, iter, content),
             Msg::InsertText(InsertTextEventData::new(iter.get_offset(), content))
         );
+
         connect!(
             relm,
-            window,
-            connect_delete_event(_, _),
-            return (Some(Msg::Quit), Inhibit(false))
+            buffer,
+            connect_delete_range(_, s_itr, e_itr),
+            Msg::DeleteText(DeleteTextEventData::new(
+                s_itr.get_offset(),
+                e_itr.get_offset()
+            ))
         );
 
         connect!(
@@ -368,8 +303,14 @@ impl Widget for Win {
             connect_clicked(_),
             Msg::SelectColor(String::from("color_tag_3"))
         );
-
         connect!(relm, save_button, connect_clicked(_), Msg::SaveNote);
+        connect!(
+            relm,
+            window,
+            connect_delete_event(_, _),
+            return (Some(Msg::Quit), Inhibit(false))
+        );
+
         Win {
             model,
             widgets: Widgets {
