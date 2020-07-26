@@ -73,6 +73,7 @@ struct Win {
 
 impl Win {
     fn apply_ops(&mut self, op: Ops) {
+        println!("{:?}", op);
         match op {
             Ops::Insert(text) => {
                 self.widgets.buffer.insert_at_cursor(text.as_str());
@@ -88,6 +89,10 @@ impl Win {
                 .widgets
                 .buffer
                 .place_cursor(&self.widgets.buffer.get_iter_at_offset(position)),
+            Ops::SelectColorTag(color) => {
+                self.model.previous_tag = self.model.current_tag.to_string();
+                self.model.current_tag = color.to_string();
+            }
         }
     }
 }
@@ -113,6 +118,7 @@ impl Update for Win {
 
         match event {
             Msg::SelectColor(color) => {
+                self.model.ops.push(Ops::SelectColorTag(color.to_string()));
                 self.model.previous_tag = self.model.current_tag.clone();
                 self.model.current_tag = color;
             }

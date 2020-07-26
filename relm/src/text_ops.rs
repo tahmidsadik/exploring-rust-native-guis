@@ -5,6 +5,7 @@ pub enum Ops {
     Insert(String),
     Delete((i32, i32)),
     MoveCursor(i32),
+    SelectColorTag(String),
 }
 
 pub struct InsertTextEventData {
