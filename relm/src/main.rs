@@ -2,15 +2,15 @@ use gtk::prelude::*;
 use gtk::Orientation::{Horizontal, Vertical};
 use gtk::{
     Align, Box, Button, ButtonExt, ContainerExt, Inhibit, Label, TextBuffer, TextTag, TextView,
-    WidgetExt, Window, WindowType,
+    WidgetExt, Window, WindowType
 };
-use relm::{connect, Relm, Update, Widget};
+use relm::{connect, Relm, Update, Widget };
 use relm_derive::Msg;
 use std::fs::File;
 use std::io::Read;
 
 mod text_ops;
-use text_ops::{DeleteTextEventData, InsertTextEventData, Ops};
+use text_ops::{DeleteTextEventData, InsertOpsData, InsertTextEventData, Ops};
 
 const COLORS: [&str; 3] = ["#F5E050", "#F38E94", "#CC8CF3"];
 const NOTE_FILE_NAME: &str = "note-backup.bin";
@@ -19,6 +19,8 @@ struct Model {
     current_tag: String,
     previous_tag: String,
     ops: Vec<Ops>,
+    is_hydrating: bool,
+    relm: Relm<Win>
 }
 
 #[derive(Msg)]
@@ -29,6 +31,7 @@ enum Msg {
     SelectColor(String),
     SaveNote,
     Hydrate,
+    SetHydrating(bool)
 }
 
 fn get_button_with_label(name: &str) -> Button {
@@ -73,10 +76,31 @@ struct Win {
 
 impl Win {
     fn apply_ops(&mut self, op: Ops) {
-        println!("{:?}", op);
         match op {
-            Ops::Insert(text) => {
-                self.widgets.buffer.insert_at_cursor(text.as_str());
+            Ops::Insert(insert_ops_data) => {
+                self.model.relm.stream().clone().emit(Msg::SelectColor(self.model.current_tag.clone()));
+
+                self.widgets
+                    .buffer
+                    .insert_at_cursor(insert_ops_data.content.as_str());
+
+                let tag_table = self
+                    .widgets
+                    .buffer
+                    .get_tag_table()
+                    .expect("Couldn't get hold of a tag table!");
+
+                let tag = tag_table
+                    .lookup(insert_ops_data.tag.as_str())
+                    .expect("Fatal: Cannot find tag color_tag_1");
+
+                let cursor_offset = self.widgets.buffer.get_property_cursor_position();
+
+                self.widgets.buffer.apply_tag(
+                    &tag,
+                    &self.widgets.buffer.get_iter_at_offset(cursor_offset - 1),
+                    &self.widgets.buffer.get_iter_at_offset(cursor_offset),
+                );
             }
             Ops::Delete(offsets) => {
                 let (start_offset, end_offset) = offsets;
@@ -105,11 +129,13 @@ impl Update for Win {
     // Specify the type of the messages sent to the update function.
     type Msg = Msg;
 
-    fn model(_: &Relm<Self>, _: ()) -> Model {
+    fn model(relm: &Relm<Self>, _: ()) -> Model {
         Model {
             current_tag: String::from("color_tag_1"),
             previous_tag: String::from("color_tag_1"),
             ops: vec![],
+            is_hydrating: true,
+            relm: relm.clone()
         }
     }
 
@@ -122,22 +148,30 @@ impl Update for Win {
                 self.model.previous_tag = self.model.current_tag.clone();
                 self.model.current_tag = color;
             }
-            Msg::InsertText(s) => {
-                let tag_table = tb
-                    .get_tag_table()
-                    .expect("Couldn't get hold of a tag table!");
+            Msg::SetHydrating(hydrating) => {
+                self.model.is_hydrating = hydrating;
+            },
+            Msg::InsertText(insert_text_data) => {
+                if self.model.is_hydrating == false {
+                    let tag_table = tb
+                        .get_tag_table()
+                        .expect("Couldn't get hold of a tag table!");
 
-                let tag = tag_table
-                    .lookup(self.model.current_tag.as_str())
-                    .expect("Fatal: Cannot find tag color_tag_1");
+                    let tag = tag_table
+                        .lookup(self.model.current_tag.as_str())
+                        .expect("Fatal: Cannot find tag color_tag_1");
 
-                tb.apply_tag(
-                    &tag,
-                    &tb.get_iter_at_offset(s.offset),
-                    &tb.get_iter_at_offset(s.offset + 1),
-                );
+                    tb.apply_tag(
+                        &tag,
+                        &tb.get_iter_at_offset(insert_text_data.offset),
+                        &tb.get_iter_at_offset(insert_text_data.offset + 1),
+                    );
+                }
 
-                self.model.ops.push(Ops::Insert(s.content));
+                self.model.ops.push(Ops::Insert(InsertOpsData::new(
+                    String::from(insert_text_data.content),
+                    self.model.current_tag.to_string(),
+                )));
 
                 // tb.serialize();
                 // let format = tb.register_serialize_tagset(None);
@@ -176,26 +210,32 @@ impl Update for Win {
                     show_error_dialog(err.to_string().as_str());
                 }
             },
-            Msg::Hydrate => match File::open(NOTE_FILE_NAME) {
-                Ok(mut file) => {
-                    let mut buf: Vec<u8> = vec![];
-                    match file.read_to_end(&mut buf) {
-                        Ok(_size) => {
-                            let ops = bincode::deserialize::<Vec<Ops>>(&buf)
-                                .expect("Error trying to deserialize binary data");
-                            for op in ops {
-                                self.apply_ops(op);
+            Msg::Hydrate => {
+                match File::open(NOTE_FILE_NAME) {
+                    Ok(mut file) => {
+                        let mut buf: Vec<u8> = vec![];
+                        match file.read_to_end(&mut buf) {
+                            Ok(_size) => {
+                                let ops = bincode::deserialize::<Vec<Ops>>(&buf)
+                                    .expect("Error trying to deserialize binary data");
+                                for op in ops {
+                                    self.apply_ops(op);
+                                }
+                            }
+                            Err(err) => {
+                                show_error_dialog(err.to_string().as_str());
                             }
                         }
-                        Err(err) => {
-                            show_error_dialog(err.to_string().as_str());
-                        }
                     }
-                }
-                Err(err) => {
-                    show_error_dialog(err.to_string().as_str());
-                }
-            },
+                    Err(err) => {
+                        show_error_dialog(err.to_string().as_str());
+                    }
+                };
+
+                self.model.relm.stream().clone().emit(Msg::SetHydrating(false));
+
+                // timeout(self.model.relm.stream(), 1000 as u32, ||  Msg::SetHydrating(false));
+            }
             Msg::Quit => gtk::main_quit(),
         }
     }
@@ -213,7 +253,6 @@ impl Widget for Win {
     fn view(relm: &Relm<Self>, model: Self::Model) -> Self {
         // Create the view using the normal GTK+ method calls.
 
-        relm.stream().clone().emit(Msg::Hydrate);
         let hbox = Box::new(Horizontal, 0);
         let button_box = gtk::Box::new(Vertical, 10);
         button_box.set_size_request(220, 220);
@@ -222,7 +261,7 @@ impl Widget for Win {
         let buffer = match tv.get_buffer() {
             Some(buffer) => buffer,
             None => {
-                show_error_dialog("Error: Now text buffer found in the text view");
+                show_error_dialog("Error: No text buffer found in the text view");
                 panic!("Fatal: Cannot retrieve text buffer from gtk text view");
             }
         };
@@ -261,7 +300,7 @@ impl Widget for Win {
                     .name(format!("color_tag_{}", idx + 1).as_str())
                     .size_points(16.0)
                     .foreground(*color)
-                    .font("Gaegu")
+                    .font("Mononoki")
                     .build()
             })
             .collect::<Vec<TextTag>>();
@@ -272,20 +311,24 @@ impl Widget for Win {
             tag_table.add(tag);
         }
 
+        relm.stream().clone().emit(Msg::Hydrate);
+
+
         connect!(
             relm,
             buffer,
-            connect_insert_text(_tb, iter, content),
+            connect_insert_text (_, iter, content),
             Msg::InsertText(InsertTextEventData::new(iter.get_offset(), content))
         );
+
 
         connect!(
             relm,
             buffer,
             connect_delete_range(_, s_itr, e_itr),
             Msg::DeleteText(DeleteTextEventData::new(
-                s_itr.get_offset(),
-                e_itr.get_offset()
+                    s_itr.get_offset(),
+                    e_itr.get_offset()
             ))
         );
 
@@ -310,6 +353,7 @@ impl Widget for Win {
             Msg::SelectColor(String::from("color_tag_3"))
         );
         connect!(relm, save_button, connect_clicked(_), Msg::SaveNote);
+
         connect!(
             relm,
             window,

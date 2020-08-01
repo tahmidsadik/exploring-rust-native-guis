@@ -1,8 +1,20 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct InsertOpsData {
+    pub content: String,
+    pub tag: String,
+}
+
+impl InsertOpsData {
+    pub fn new(content: String, tag: String) -> Self {
+        return InsertOpsData { content, tag };
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Ops {
-    Insert(String),
+    Insert(InsertOpsData),
     Delete((i32, i32)),
     MoveCursor(i32),
     SelectColorTag(String),
