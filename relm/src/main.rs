@@ -1,15 +1,20 @@
+extern crate pango;
+
+use gio::prelude::*;
 use gtk::prelude::*;
 use gtk::Orientation::{Horizontal, Vertical};
 use gtk::{
     Align, Box, Button, ButtonExt, ContainerExt, Inhibit, Label, TextBuffer, TextTag, TextView,
-    WidgetExt, Window, WindowType
+    WidgetExt, Window, WindowType,
 };
-use relm::{connect, Relm, Update, Widget };
+use relm::{connect, Relm, Update, Widget};
 use relm_derive::Msg;
 use std::fs::File;
 use std::io::Read;
 
+mod tags;
 mod text_ops;
+use tags::{TagType, TextTagState};
 use text_ops::{DeleteTextEventData, InsertOpsData, InsertTextEventData, Ops};
 
 const COLORS: [&str; 3] = ["#F5E050", "#F38E94", "#CC8CF3"];
@@ -20,7 +25,11 @@ struct Model {
     previous_tag: String,
     ops: Vec<Ops>,
     is_hydrating: bool,
-    relm: Relm<Win>
+    relm: Relm<Win>,
+    /**
+     * should probably use a hashmap here
+     */
+    italic_tag_state: TextTagState,
 }
 
 #[derive(Msg)]
@@ -31,7 +40,8 @@ enum Msg {
     SelectColor(String),
     SaveNote,
     Hydrate,
-    SetHydrating(bool)
+    SetHydrating(bool),
+    UpdateTagState((bool, i32)),
 }
 
 fn get_button_with_label(name: &str) -> Button {
@@ -78,7 +88,11 @@ impl Win {
     fn apply_ops(&mut self, op: Ops) {
         match op {
             Ops::Insert(insert_ops_data) => {
-                self.model.relm.stream().clone().emit(Msg::SelectColor(self.model.current_tag.clone()));
+                self.model
+                    .relm
+                    .stream()
+                    .clone()
+                    .emit(Msg::SelectColor(self.model.current_tag.clone()));
 
                 self.widgets
                     .buffer
@@ -135,7 +149,8 @@ impl Update for Win {
             previous_tag: String::from("color_tag_1"),
             ops: vec![],
             is_hydrating: true,
-            relm: relm.clone()
+            relm: relm.clone(),
+            italic_tag_state: TextTagState::new(TagType::Italic, '*'),
         }
     }
 
@@ -150,7 +165,7 @@ impl Update for Win {
             }
             Msg::SetHydrating(hydrating) => {
                 self.model.is_hydrating = hydrating;
-            },
+            }
             Msg::InsertText(insert_text_data) => {
                 if self.model.is_hydrating == false {
                     let tag_table = tb
@@ -166,37 +181,81 @@ impl Update for Win {
                         &tb.get_iter_at_offset(insert_text_data.offset),
                         &tb.get_iter_at_offset(insert_text_data.offset + 1),
                     );
+
+                    if insert_text_data.content.chars().nth(0).unwrap()
+                        == self.model.italic_tag_state.tag_symbol
+                    {
+                        self.model
+                            .relm
+                            .stream()
+                            .clone()
+                            .emit(Msg::UpdateTagState((true, insert_text_data.offset)));
+                    }
                 }
 
                 self.model.ops.push(Ops::Insert(InsertOpsData::new(
                     String::from(insert_text_data.content),
                     self.model.current_tag.to_string(),
                 )));
+            }
+            Msg::UpdateTagState((status, offset)) => {
+                if self.model.italic_tag_state.is_active == false {
+                    self.model.italic_tag_state.is_active = status;
+                    self.model.italic_tag_state.start_offset = offset;
+                } else {
+                    let buffer = &self.widgets.buffer;
 
-                // tb.serialize();
-                // let format = tb.register_serialize_tagset(None);
+                    let first_char = buffer
+                        .get_text(
+                            &buffer
+                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 1),
+                            &buffer
+                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 2),
+                            false,
+                        )
+                        .expect("Cannot unwrap first char in UpdateTagState");
 
-                // let serialized =
-                //     tb.serialize(tb, &format, &tb.get_start_iter(), &tb.get_end_iter());
+                    //check if first_char after first_symbol is a space
+                    let last_char = buffer
+                        .get_text(
+                            &buffer.get_iter_at_offset(offset - 1),
+                            &buffer.get_iter_at_offset(offset),
+                            false,
+                        )
+                        .expect("Cannot unwrap last char in UpdateTagState");
 
-                // for f in formats {
-                //     println!("{:?}", f);
-                // }
+                    if first_char == String::from(" ") || last_char == String::from(" ") {
+                        self.model.italic_tag_state.start_offset = offset;
+                    } else {
+                        let tag = buffer
+                            .get_tag_table()
+                            .unwrap()
+                            .lookup("italic")
+                            .expect("Fatal: Cannot find tag color_tag_1");
 
-                // find text delta
-                // let search_iter = tb.get_start_iter();
-                // match search_iter.forward_search(
-                //     "Hello",
-                //     gtk::TextSearchFlags::CASE_INSENSITIVE,
-                //     None,
-                // ) {
-                //     Some((res_start_iter, res_end_iter)) => println!(
-                //         "{}, {}",
-                //         res_start_iter.get_offset(),
-                //         res_end_iter.get_offset()
-                //     ),
-                //     None => {}
-                // };
+                        buffer.apply_tag(
+                            &tag,
+                            &buffer
+                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 1),
+                            &buffer.get_iter_at_offset(offset - 1),
+                        );
+
+                        buffer.delete(
+                            &mut buffer
+                                .get_iter_at_offset(self.model.italic_tag_state.start_offset),
+                            &mut buffer
+                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 1),
+                        );
+
+                        buffer.delete(
+                            &mut buffer.get_iter_at_offset(offset - 1),
+                            &mut buffer.get_iter_at_offset(offset),
+                        );
+
+                        self.model.italic_tag_state.start_offset = -1;
+                        self.model.italic_tag_state.is_active = false;
+                    }
+                }
             }
             Msg::DeleteText(delete_text_event_data) => self.model.ops.push(Ops::Delete((
                 delete_text_event_data.start_offset,
@@ -232,7 +291,11 @@ impl Update for Win {
                     }
                 };
 
-                self.model.relm.stream().clone().emit(Msg::SetHydrating(false));
+                self.model
+                    .relm
+                    .stream()
+                    .clone()
+                    .emit(Msg::SetHydrating(false));
 
                 // timeout(self.model.relm.stream(), 1000 as u32, ||  Msg::SetHydrating(false));
             }
@@ -291,7 +354,7 @@ impl Widget for Win {
         window.show_all();
 
         // TODO: move this into a sepaate function
-        let color_tags = COLORS
+        let mut color_tags = COLORS
             .to_vec()
             .iter()
             .enumerate()
@@ -300,10 +363,16 @@ impl Widget for Win {
                     .name(format!("color_tag_{}", idx + 1).as_str())
                     .size_points(16.0)
                     .foreground(*color)
-                    .font("Mononoki")
+                    .font("Mononoki Nerd Font Mono")
                     .build()
             })
             .collect::<Vec<TextTag>>();
+
+        let italic_tag = gtk::TextTagBuilder::new()
+            .name("italic")
+            .style(pango::Style::Italic)
+            .build();
+        color_tags.push(italic_tag);
 
         let tag_table = buffer.get_tag_table().unwrap();
 
@@ -313,22 +382,20 @@ impl Widget for Win {
 
         relm.stream().clone().emit(Msg::Hydrate);
 
-
         connect!(
             relm,
             buffer,
-            connect_insert_text (_, iter, content),
+            connect_insert_text(_, iter, content),
             Msg::InsertText(InsertTextEventData::new(iter.get_offset(), content))
         );
-
 
         connect!(
             relm,
             buffer,
             connect_delete_range(_, s_itr, e_itr),
             Msg::DeleteText(DeleteTextEventData::new(
-                    s_itr.get_offset(),
-                    e_itr.get_offset()
+                s_itr.get_offset(),
+                e_itr.get_offset()
             ))
         );
 

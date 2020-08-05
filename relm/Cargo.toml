@@ -8,7 +8,9 @@ edition = "2018"
 
 [dependencies]
 gtk = { version = "0.9.0", features = ["v3_24_8"] }
+gio = { version = "", fetures = ["v2_64"]}
 relm = "0.20.0"
 relm-derive = "0.20.0"
 bincode = "1.3.1"
 serde = { version="1.0.114", features = ["derive"] }
+pango = "0.9.0"
