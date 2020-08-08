@@ -1,6 +1,5 @@
 extern crate pango;
 
-use gio::prelude::*;
 use gtk::prelude::*;
 use gtk::Orientation::{Horizontal, Vertical};
 use gtk::{
@@ -14,7 +13,7 @@ use std::io::Read;
 
 mod tags;
 mod text_ops;
-use tags::{TagType, TextTagState};
+use tags::BoldItalicTagState;
 use text_ops::{DeleteTextEventData, InsertOpsData, InsertTextEventData, Ops};
 
 const COLORS: [&str; 3] = ["#F5E050", "#F38E94", "#CC8CF3"];
@@ -29,7 +28,8 @@ struct Model {
     /**
      * should probably use a hashmap here
      */
-    italic_tag_state: TextTagState,
+    bold_italic_tag_state: BoldItalicTagState,
+    // italic_tag_state: TextTagState,
 }
 
 #[derive(Msg)]
@@ -41,7 +41,8 @@ enum Msg {
     SaveNote,
     Hydrate,
     SetHydrating(bool),
-    UpdateTagState((bool, i32)),
+    // UpdateTagState((bool, i32)),
+    // UpdateBoldItalicTagState(),
 }
 
 fn get_button_with_label(name: &str) -> Button {
@@ -86,6 +87,13 @@ struct Win {
 
 impl Win {
     fn apply_ops(&mut self, op: Ops) {
+        let tb = &self.widgets.buffer;
+        let tag_table = self
+            .widgets
+            .buffer
+            .get_tag_table()
+            .expect("Couldn't get hold of a tag table!");
+
         match op {
             Ops::Insert(insert_ops_data) => {
                 self.model
@@ -94,42 +102,45 @@ impl Win {
                     .clone()
                     .emit(Msg::SelectColor(self.model.current_tag.clone()));
 
-                self.widgets
-                    .buffer
-                    .insert_at_cursor(insert_ops_data.content.as_str());
-
-                let tag_table = self
-                    .widgets
-                    .buffer
-                    .get_tag_table()
-                    .expect("Couldn't get hold of a tag table!");
+                tb.insert_at_cursor(insert_ops_data.content.as_str());
 
                 let tag = tag_table
                     .lookup(insert_ops_data.tag.as_str())
                     .expect("Fatal: Cannot find tag color_tag_1");
 
-                let cursor_offset = self.widgets.buffer.get_property_cursor_position();
+                let cursor_offset = tb.get_property_cursor_position();
 
-                self.widgets.buffer.apply_tag(
+                tb.apply_tag(
                     &tag,
-                    &self.widgets.buffer.get_iter_at_offset(cursor_offset - 1),
-                    &self.widgets.buffer.get_iter_at_offset(cursor_offset),
+                    &tb.get_iter_at_offset(cursor_offset - 1),
+                    &tb.get_iter_at_offset(cursor_offset),
                 );
             }
             Ops::Delete(offsets) => {
                 let (start_offset, end_offset) = offsets;
-                self.widgets.buffer.delete(
-                    &mut self.widgets.buffer.get_iter_at_offset(start_offset),
-                    &mut self.widgets.buffer.get_iter_at_offset(end_offset),
+                tb.delete(
+                    &mut tb.get_iter_at_offset(start_offset),
+                    &mut tb.get_iter_at_offset(end_offset),
                 );
             }
             Ops::MoveCursor(position) => self
                 .widgets
                 .buffer
-                .place_cursor(&self.widgets.buffer.get_iter_at_offset(position)),
+                .place_cursor(&tb.get_iter_at_offset(position)),
             Ops::SelectColorTag(color) => {
                 self.model.previous_tag = self.model.current_tag.to_string();
                 self.model.current_tag = color.to_string();
+            }
+            Ops::ApplyTag((tag_name, start_offset, end_offset)) => {
+                let tag = tag_table
+                    .lookup(tag_name.as_str())
+                    .expect("Fatal: Cannot find tag color_tag_1");
+
+                tb.apply_tag(
+                    &tag,
+                    &tb.get_iter_at_offset(start_offset),
+                    &tb.get_iter_at_offset(end_offset),
+                );
             }
         }
     }
@@ -150,7 +161,11 @@ impl Update for Win {
             ops: vec![],
             is_hydrating: true,
             relm: relm.clone(),
-            italic_tag_state: TextTagState::new(TagType::Italic, '*'),
+            // italic_tag_state: TextTagState::new(TagType::Italic, '*'),
+            bold_italic_tag_state: BoldItalicTagState::new(
+                "italic".to_string(),
+                "bold".to_string(),
+            ),
         }
     }
 
@@ -182,80 +197,99 @@ impl Update for Win {
                         &tb.get_iter_at_offset(insert_text_data.offset + 1),
                     );
 
-                    if insert_text_data.content.chars().nth(0).unwrap()
-                        == self.model.italic_tag_state.tag_symbol
-                    {
-                        self.model
-                            .relm
-                            .stream()
-                            .clone()
-                            .emit(Msg::UpdateTagState((true, insert_text_data.offset)));
+                    let tagged_string = if self.model.bold_italic_tag_state.single_asterisk_active {
+                        println!(
+                            "start offset = {}, end-offset = {}",
+                            self.model.bold_italic_tag_state.start_offset, insert_text_data.offset
+                        );
+                        tb.get_text(
+                            &tb.get_iter_at_offset(
+                                self.model.bold_italic_tag_state.start_offset + 1,
+                            ),
+                            &tb.get_iter_at_offset(insert_text_data.offset - 1),
+                            false,
+                        )
+                        .expect("Error while trying to read gtk buffer to find tagged_string")
+                        .to_string()
+                    } else {
+                        println!("in the else block, single asterisk is not active");
+                        "".to_string()
+                    };
+
+                    let s_offset = self.model.bold_italic_tag_state.start_offset;
+
+                    let (_, operations_to_perform) = self.model.bold_italic_tag_state.update_state(
+                        insert_text_data.offset,
+                        tagged_string,
+                        insert_text_data.content.to_string(),
+                    );
+
+                    for ops in operations_to_perform {
+                        self.apply_ops(ops);
                     }
+
+                    // if let Some(tag_name) = tag_to_apply {
+                    //     let tag = tag_table
+                    //         .lookup(tag_name.as_str())
+                    //         .expect("Fatal: Cannot find tag");
+                    //
+                    //     let text_to_apply_tag = tb.get_text(
+                    //         &tb.get_iter_at_offset(
+                    //             s_offset + if tag_name.as_str() == "bold" { 2 } else { 1 },
+                    //         ),
+                    //         &tb.get_iter_at_offset(
+                    //             insert_text_data.offset + 1
+                    //                 - if tag_name.as_str() == "bold" { 2 } else { 1 },
+                    //         ),
+                    //         true,
+                    //     );
+                    //
+                    //     println!("text to apply tag = {}", text_to_apply_tag.unwrap());
+                    //     tb.apply_tag(
+                    //         &tag,
+                    //         &tb.get_iter_at_offset(
+                    //             s_offset + if tag_name.as_str() == "bold" { 2 } else { 1 },
+                    //         ),
+                    //         &tb.get_iter_at_offset(
+                    //             insert_text_data.offset + 1
+                    //                 - if tag_name.as_str() == "bold" { 2 } else { 1 },
+                    //         ),
+                    //     );
+                    //
+                    //     tb.delete(
+                    //         &mut tb.get_iter_at_offset(s_offset),
+                    //         &mut tb.get_iter_at_offset(
+                    //             s_offset + if tag_name.as_str() == "bold" { 2 } else { 1 },
+                    //         ),
+                    //     );
+                    //
+                    //     let text_to_delete = tb
+                    //         .get_text(
+                    //             &tb.get_iter_at_offset(
+                    //                 insert_text_data.offset
+                    //                     - if tag_name.as_str() == "bold" { 3 } else { 2 },
+                    //             ),
+                    //             &tb.get_iter_at_offset(insert_text_data.offset),
+                    //             true,
+                    //         )
+                    //         .unwrap();
+                    //
+                    //     println!("Text to delete ${}$", text_to_delete);
+                    //
+                    //     tb.delete(
+                    //         &mut tb.get_iter_at_offset(
+                    //             insert_text_data.offset
+                    //                 - if tag_name.as_str() == "bold" { 3 } else { 2 },
+                    //         ),
+                    //         &mut tb.get_iter_at_offset(insert_text_data.offset + 1),
+                    //     );
+                    // }
                 }
 
                 self.model.ops.push(Ops::Insert(InsertOpsData::new(
                     String::from(insert_text_data.content),
                     self.model.current_tag.to_string(),
                 )));
-            }
-            Msg::UpdateTagState((status, offset)) => {
-                if self.model.italic_tag_state.is_active == false {
-                    self.model.italic_tag_state.is_active = status;
-                    self.model.italic_tag_state.start_offset = offset;
-                } else {
-                    let buffer = &self.widgets.buffer;
-
-                    let first_char = buffer
-                        .get_text(
-                            &buffer
-                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 1),
-                            &buffer
-                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 2),
-                            false,
-                        )
-                        .expect("Cannot unwrap first char in UpdateTagState");
-
-                    //check if first_char after first_symbol is a space
-                    let last_char = buffer
-                        .get_text(
-                            &buffer.get_iter_at_offset(offset - 1),
-                            &buffer.get_iter_at_offset(offset),
-                            false,
-                        )
-                        .expect("Cannot unwrap last char in UpdateTagState");
-
-                    if first_char == String::from(" ") || last_char == String::from(" ") {
-                        self.model.italic_tag_state.start_offset = offset;
-                    } else {
-                        let tag = buffer
-                            .get_tag_table()
-                            .unwrap()
-                            .lookup("italic")
-                            .expect("Fatal: Cannot find tag color_tag_1");
-
-                        buffer.apply_tag(
-                            &tag,
-                            &buffer
-                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 1),
-                            &buffer.get_iter_at_offset(offset - 1),
-                        );
-
-                        buffer.delete(
-                            &mut buffer
-                                .get_iter_at_offset(self.model.italic_tag_state.start_offset),
-                            &mut buffer
-                                .get_iter_at_offset(self.model.italic_tag_state.start_offset + 1),
-                        );
-
-                        buffer.delete(
-                            &mut buffer.get_iter_at_offset(offset - 1),
-                            &mut buffer.get_iter_at_offset(offset),
-                        );
-
-                        self.model.italic_tag_state.start_offset = -1;
-                        self.model.italic_tag_state.is_active = false;
-                    }
-                }
             }
             Msg::DeleteText(delete_text_event_data) => self.model.ops.push(Ops::Delete((
                 delete_text_event_data.start_offset,
@@ -361,9 +395,10 @@ impl Widget for Win {
             .map(|(idx, color)| {
                 gtk::TextTagBuilder::new()
                     .name(format!("color_tag_{}", idx + 1).as_str())
-                    .size_points(16.0)
+                    .size_points(10.0)
                     .foreground(*color)
-                    .font("Mononoki Nerd Font Mono")
+                    // .font("Mononoki Nerd Font Mono")
+                    .font("Fira Mono")
                     .build()
             })
             .collect::<Vec<TextTag>>();
@@ -372,7 +407,9 @@ impl Widget for Win {
             .name("italic")
             .style(pango::Style::Italic)
             .build();
+        let bold_tag = gtk::TextTagBuilder::new().name("bold").weight(600).build();
         color_tags.push(italic_tag);
+        color_tags.push(bold_tag);
 
         let tag_table = buffer.get_tag_table().unwrap();
 
