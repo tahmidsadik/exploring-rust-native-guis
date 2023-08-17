@@ -2,10 +2,7 @@ extern crate pango;
 
 use gtk::prelude::*;
 use gtk::Orientation::{Horizontal, Vertical};
-use gtk::{
-    Align, Box, Button, ButtonExt, ContainerExt, Inhibit, Label, TextBuffer, TextTag, TextView,
-    WidgetExt, Window, WindowType,
-};
+use gtk::{Align, Box, Button, Inhibit, Label, TextBuffer, TextTag, TextView, Window, WindowType};
 use relm::{connect, Relm, Update, Widget};
 use relm_derive::Msg;
 use std::fs::File;
@@ -65,7 +62,7 @@ fn show_error_dialog(error_msg: &str) {
         d.close();
     });
     dialog.set_size_request(400, 250);
-    let content_box = dialog.get_content_area();
+    let content_box = dialog.content_area();
     let error_label = Label::new(Some(error_msg));
     content_box.pack_start(&error_label, false, false, 0);
 
@@ -91,7 +88,7 @@ impl Win {
         let tag_table = self
             .widgets
             .buffer
-            .get_tag_table()
+            .tag_table()
             .expect("Couldn't get hold of a tag table!");
 
         match op {
@@ -108,25 +105,25 @@ impl Win {
                     .lookup(insert_ops_data.tag.as_str())
                     .expect("Fatal: Cannot find tag color_tag_1");
 
-                let cursor_offset = tb.get_property_cursor_position();
+                let cursor_offset = tb.cursor_position();
 
                 tb.apply_tag(
                     &tag,
-                    &tb.get_iter_at_offset(cursor_offset - 1),
-                    &tb.get_iter_at_offset(cursor_offset),
+                    &tb.iter_at_offset(cursor_offset - 1),
+                    &tb.iter_at_offset(cursor_offset),
                 );
             }
             Ops::Delete(offsets) => {
                 let (start_offset, end_offset) = offsets;
                 tb.delete(
-                    &mut tb.get_iter_at_offset(start_offset),
-                    &mut tb.get_iter_at_offset(end_offset),
+                    &mut tb.iter_at_offset(start_offset),
+                    &mut tb.iter_at_offset(end_offset),
                 );
             }
             Ops::MoveCursor(position) => self
                 .widgets
                 .buffer
-                .place_cursor(&tb.get_iter_at_offset(position)),
+                .place_cursor(&tb.iter_at_offset(position)),
             Ops::SelectColorTag(color) => {
                 self.model.previous_tag = self.model.current_tag.to_string();
                 self.model.current_tag = color.to_string();
@@ -138,8 +135,8 @@ impl Win {
 
                 tb.apply_tag(
                     &tag,
-                    &tb.get_iter_at_offset(start_offset),
-                    &tb.get_iter_at_offset(end_offset),
+                    &tb.iter_at_offset(start_offset),
+                    &tb.iter_at_offset(end_offset),
                 );
             }
         }
@@ -183,9 +180,7 @@ impl Update for Win {
             }
             Msg::InsertText(insert_text_data) => {
                 if self.model.is_hydrating == false {
-                    let tag_table = tb
-                        .get_tag_table()
-                        .expect("Couldn't get hold of a tag table!");
+                    let tag_table = tb.tag_table().expect("Couldn't get hold of a tag table!");
 
                     let tag = tag_table
                         .lookup(self.model.current_tag.as_str())
@@ -193,8 +188,8 @@ impl Update for Win {
 
                     tb.apply_tag(
                         &tag,
-                        &tb.get_iter_at_offset(insert_text_data.offset),
-                        &tb.get_iter_at_offset(insert_text_data.offset + 1),
+                        &tb.iter_at_offset(insert_text_data.offset),
+                        &tb.iter_at_offset(insert_text_data.offset + 1),
                     );
 
                     let tagged_string = if self.model.bold_italic_tag_state.single_asterisk_active {
@@ -202,11 +197,9 @@ impl Update for Win {
                             "start offset = {}, end-offset = {}",
                             self.model.bold_italic_tag_state.start_offset, insert_text_data.offset
                         );
-                        tb.get_text(
-                            &tb.get_iter_at_offset(
-                                self.model.bold_italic_tag_state.start_offset + 1,
-                            ),
-                            &tb.get_iter_at_offset(insert_text_data.offset - 1),
+                        tb.text(
+                            &tb.iter_at_offset(self.model.bold_italic_tag_state.start_offset + 1),
+                            &tb.iter_at_offset(insert_text_data.offset - 1),
                             false,
                         )
                         .expect("Error while trying to read gtk buffer to find tagged_string")
@@ -355,7 +348,7 @@ impl Widget for Win {
         button_box.set_size_request(220, 220);
 
         let tv = TextView::new();
-        let buffer = match tv.get_buffer() {
+        let buffer = match tv.buffer() {
             Some(buffer) => buffer,
             None => {
                 show_error_dialog("Error: No text buffer found in the text view");
@@ -393,25 +386,28 @@ impl Widget for Win {
             .iter()
             .enumerate()
             .map(|(idx, color)| {
-                gtk::TextTagBuilder::new()
+                gtk::builders::TextTagBuilder::new()
                     .name(format!("color_tag_{}", idx + 1).as_str())
-                    .size_points(10.0)
+                    .size_points(14.0)
                     .foreground(*color)
                     // .font("Mononoki Nerd Font Mono")
-                    .font("Fira Mono")
+                    .font("JetBrains Mono")
                     .build()
             })
             .collect::<Vec<TextTag>>();
 
-        let italic_tag = gtk::TextTagBuilder::new()
+        let italic_tag = gtk::builders::TextTagBuilder::new()
             .name("italic")
-            .style(pango::Style::Italic)
+            .style(gtk::pango::Style::Italic)
             .build();
-        let bold_tag = gtk::TextTagBuilder::new().name("bold").weight(600).build();
+        let bold_tag = gtk::builders::TextTagBuilder::new()
+            .name("bold")
+            .weight(600)
+            .build();
         color_tags.push(italic_tag);
         color_tags.push(bold_tag);
 
-        let tag_table = buffer.get_tag_table().unwrap();
+        let tag_table = buffer.tag_table().unwrap();
 
         for tag in &color_tags {
             tag_table.add(tag);
@@ -423,17 +419,14 @@ impl Widget for Win {
             relm,
             buffer,
             connect_insert_text(_, iter, content),
-            Msg::InsertText(InsertTextEventData::new(iter.get_offset(), content))
+            Msg::InsertText(InsertTextEventData::new(iter.offset(), content))
         );
 
         connect!(
             relm,
             buffer,
             connect_delete_range(_, s_itr, e_itr),
-            Msg::DeleteText(DeleteTextEventData::new(
-                s_itr.get_offset(),
-                e_itr.get_offset()
-            ))
+            Msg::DeleteText(DeleteTextEventData::new(s_itr.offset(), e_itr.offset()))
         );
 
         connect!(
